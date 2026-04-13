@@ -5,6 +5,7 @@ import './App.css'
 type CurrentUser = {
   userId: number
   tenantId: string | null
+  tenantName: string | null
   email: string
   roles: string[]
 }
@@ -40,6 +41,8 @@ function App() {
   const [view, setView] = useState<AppView>('login')
   const [error, setError] = useState<string | null>(null)
   const [loadingLogin, setLoadingLogin] = useState(false)
+  const [loadingQuestionnaire, setLoadingQuestionnaire] = useState(false)
+  const [openingQuestionnaireId, setOpeningQuestionnaireId] = useState<number | null>(null)
 
   async function api<T>(path: string, email: string): Promise<T> {
     const response = await fetch(path, {
@@ -114,10 +117,26 @@ function App() {
     }
   }
 
-  function openQuestionnaire(questionnaire: QuestionnaireResponse) {
-    setSelectedQuestionnaire(questionnaire)
-    setAnswers({})
-    setView('questionnaire')
+  async function openQuestionnaire(questionnaire: QuestionnaireResponse) {
+    setLoadingQuestionnaire(true)
+    setOpeningQuestionnaireId(questionnaire.id)
+    setError(null)
+
+    try {
+      const questionnaireDetails = await api<QuestionnaireResponse>(
+        `/api/questionnaire/${questionnaire.id}`,
+        debugUser,
+      )
+
+      setSelectedQuestionnaire(questionnaireDetails)
+      setAnswers({})
+      setView('questionnaire')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setLoadingQuestionnaire(false)
+      setOpeningQuestionnaireId(null)
+    }
   }
 
   function handleAnswerChange(key: string, event: ChangeEvent<HTMLTextAreaElement>) {
@@ -204,7 +223,7 @@ function App() {
           <section className="user-summary">
             <article>
               <span className="summary-label">Tenant</span>
-              <strong>{currentUser.tenantId ?? 'No tenant assigned'}</strong>
+              <strong>{currentUser.tenantName ?? 'No tenant assigned'}</strong>
             </article>
             <article>
               <span className="summary-label">Roles</span>
@@ -247,15 +266,20 @@ function App() {
                       key={questionnaire.id}
                       type="button"
                       className="table-row"
-                      onClick={() => openQuestionnaire(questionnaire)}
+                      onClick={() => void openQuestionnaire(questionnaire)}
+                      disabled={loadingQuestionnaire}
                     >
                       <span className="questionnaire-title">{questionnaire.title}</span>
-                      <span className="submission-badge">Not submitted</span>
+                      <span className="submission-badge">
+                        {openingQuestionnaireId === questionnaire.id ? 'Opening...' : 'Not submitted'}
+                      </span>
                     </button>
                   ))}
                 </div>
               )}
             </div>
+
+            {error ? <p className="error-banner">{error}</p> : null}
           </section>
         </section>
       ) : null}
@@ -276,7 +300,7 @@ function App() {
             </div>
             <div className="questionnaire-meta">
               <span>{currentUser.email}</span>
-              <span>Tenant {currentUser.tenantId ?? 'n/a'}</span>
+              <span>{currentUser.tenantName ?? 'No tenant assigned'}</span>
             </div>
           </header>
 
