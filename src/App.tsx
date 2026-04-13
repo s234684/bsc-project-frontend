@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { FormEvent } from 'react'
+import type { ChangeEvent, FormEvent } from 'react'
 import './App.css'
 
 type CurrentUser = {
@@ -14,7 +14,19 @@ type QuestionnaireResponse = {
   title: string
   tenantId: string
   creatorId: number | null
+  definitionJson: string
 }
+
+type QuestionDefinition = {
+  key: string
+  text: string
+}
+
+type ParsedDefinition = {
+  questions: QuestionDefinition[]
+}
+
+type AppView = 'login' | 'home' | 'questionnaire'
 
 const DEFAULT_DEBUG_USER = 'alice@example.com'
 
@@ -22,9 +34,12 @@ function App() {
   const [debugUser, setDebugUser] = useState(DEFAULT_DEBUG_USER)
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null)
   const [questionnaires, setQuestionnaires] = useState<QuestionnaireResponse[]>([])
+  const [selectedQuestionnaire, setSelectedQuestionnaire] = useState<QuestionnaireResponse | null>(null)
+  const [questionSearch, setQuestionSearch] = useState('')
+  const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [view, setView] = useState<AppView>('login')
   const [error, setError] = useState<string | null>(null)
-  const [loadingUser, setLoadingUser] = useState(false)
-  const [loadingQuestionnaires, setLoadingQuestionnaires] = useState(false)
+  const [loadingLogin, setLoadingLogin] = useState(false)
 
   async function api<T>(path: string, email: string): Promise<T> {
     const response = await fetch(path, {
@@ -41,64 +56,121 @@ function App() {
     return response.json() as Promise<T>
   }
 
-  async function loadCurrentUser(email: string) {
-    setLoadingUser(true)
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setLoadingLogin(true)
     setError(null)
 
     try {
-      const data = await api<CurrentUser>('/api/auth/me-safe', email)
-      setCurrentUser(data)
+      const [user, availableQuestionnaires] = await Promise.all([
+        api<CurrentUser>('/api/auth/me-safe', debugUser),
+        api<QuestionnaireResponse[]>('/api/questionnaire', debugUser),
+      ])
+
+      setCurrentUser(user)
+      setQuestionnaires(availableQuestionnaires)
+      setSelectedQuestionnaire(null)
+      setAnswers({})
+      setQuestionSearch('')
+      setView('home')
     } catch (err) {
       setCurrentUser(null)
       setQuestionnaires([])
+      setSelectedQuestionnaire(null)
+      setAnswers({})
+      setView('login')
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
-      setLoadingUser(false)
+      setLoadingLogin(false)
     }
   }
 
-  async function loadQuestionnaires(email: string) {
-    setLoadingQuestionnaires(true)
+  function handleLogout() {
+    setCurrentUser(null)
+    setQuestionnaires([])
+    setSelectedQuestionnaire(null)
+    setAnswers({})
+    setQuestionSearch('')
     setError(null)
+    setView('login')
+  }
 
+  function parseDefinition(definitionJson: string): ParsedDefinition {
     try {
-      const data = await api<QuestionnaireResponse[]>('/api/questionnaire', email)
-      setQuestionnaires(data)
-    } catch (err) {
-      setQuestionnaires([])
-      setError(err instanceof Error ? err.message : 'Unknown error')
-    } finally {
-      setLoadingQuestionnaires(false)
+      const parsed = JSON.parse(definitionJson) as Partial<ParsedDefinition>
+
+      if (!Array.isArray(parsed.questions)) {
+        return { questions: [] }
+      }
+
+      return {
+        questions: parsed.questions.filter(
+          (question): question is QuestionDefinition =>
+            typeof question?.key === 'string' && typeof question?.text === 'string',
+        ),
+      }
+    } catch {
+      return { questions: [] }
     }
   }
+
+  function openQuestionnaire(questionnaire: QuestionnaireResponse) {
+    setSelectedQuestionnaire(questionnaire)
+    setAnswers({})
+    setView('questionnaire')
+  }
+
+  function handleAnswerChange(key: string, event: ChangeEvent<HTMLTextAreaElement>) {
+    setAnswers((currentAnswers) => ({
+      ...currentAnswers,
+      [key]: event.target.value,
+    }))
+  }
+
+  function handleFakeSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+  }
+
+  const filteredQuestionnaires = questionnaires.filter((questionnaire) =>
+    questionnaire.title.toLowerCase().includes(questionSearch.trim().toLowerCase()),
+  )
+
+  const selectedDefinition = selectedQuestionnaire
+    ? parseDefinition(selectedQuestionnaire.definitionJson)
+    : null
 
   useEffect(() => {
-    void loadCurrentUser(DEFAULT_DEBUG_USER)
-  }, [])
+    if (selectedQuestionnaire == null) {
+      return
+    }
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    void loadCurrentUser(debugUser)
-  }
+    const refreshedSelection = questionnaires.find(
+      (questionnaire) => questionnaire.id === selectedQuestionnaire.id,
+    )
 
-  function handleLoadQuestionnaires() {
-    void loadQuestionnaires(debugUser)
-  }
+    if (refreshedSelection) {
+      setSelectedQuestionnaire(refreshedSelection)
+    }
+  }, [questionnaires, selectedQuestionnaire])
 
   return (
     <main className="app-shell">
-      <section className="panel">
-        <p className="eyebrow">Mock auth + questionnaire slice</p>
-        <h1>Backend identity check</h1>
-        <p className="lead">
-          This screen sends an <code>X-Debug-User</code> header to the backend,
-          verifies the current user, and then loads tenant-scoped questionnaires
-          through the same mock identity.
-        </p>
+      <div className="ambient ambient-one" />
+      <div className="ambient ambient-two" />
 
-        <form className="debug-form" onSubmit={handleSubmit}>
-          <label htmlFor="debug-user">Debug user email</label>
-          <div className="row">
+      {view === 'login' ? (
+        <section className="auth-card">
+          <div className="auth-copy">
+            <p className="eyebrow">Questionnaire Portal</p>
+            <h1>Tenant access</h1>
+            <p className="lead">
+              Sign in with the default mock user to open the tenant workspace and
+              review available questionnaires.
+            </p>
+          </div>
+
+          <form className="login-form" onSubmit={handleLogin}>
+            <label htmlFor="debug-user">Email</label>
             <input
               id="debug-user"
               name="debug-user"
@@ -107,67 +179,131 @@ function App() {
               onChange={(event) => setDebugUser(event.target.value)}
               placeholder="alice@example.com"
             />
-            <button type="submit" disabled={loadingUser}>
-              {loadingUser ? 'Loading user...' : 'Load current user'}
+
+            <button type="submit" disabled={loadingLogin}>
+              {loadingLogin ? 'Logging in...' : 'Log in'}
             </button>
-          </div>
-        </form>
+          </form>
 
-        <div className="status-grid">
-          <article className="card">
-            <h2>Auth request</h2>
-            <p>
-              <code>GET /api/auth/me-safe</code>
-            </p>
-          </article>
-          <article className="card">
-            <h2>Header used</h2>
-            <p>
-              <code>X-Debug-User: {debugUser || '(empty)'}</code>
-            </p>
-          </article>
-        </div>
-
-        {error ? (
-          <section className="result error">
-            <h2>Backend response</h2>
-            <p>{error}</p>
-          </section>
-        ) : (
-          <section className="result">
-            <h2>Resolved current user</h2>
-            <pre>{currentUser ? JSON.stringify(currentUser, null, 2) : 'No user loaded yet.'}</pre>
-          </section>
-        )}
-
-        <section className="result questionnaires">
-          <div className="section-heading">
-            <h2>Tenant questionnaires</h2>
-            <button
-              type="button"
-              onClick={handleLoadQuestionnaires}
-              disabled={loadingQuestionnaires || !currentUser}
-            >
-              {loadingQuestionnaires ? 'Loading...' : 'Load questionnaires'}
-            </button>
-          </div>
-
-          {questionnaires.length === 0 ? (
-            <p>No questionnaires loaded yet.</p>
-          ) : (
-            <ul className="questionnaire-list">
-              {questionnaires.map((questionnaire) => (
-                <li key={questionnaire.id}>
-                  <strong>{questionnaire.title}</strong>
-                  <span>Id: {questionnaire.id}</span>
-                  <span>Tenant: {questionnaire.tenantId}</span>
-                  <span>Creator: {questionnaire.creatorId ?? 'None'}</span>
-                </li>
-              ))}
-            </ul>
-          )}
+          {error ? <p className="error-banner">{error}</p> : null}
         </section>
-      </section>
+      ) : null}
+
+      {view === 'home' && currentUser ? (
+        <section className="dashboard-shell">
+          <header className="dashboard-header">
+            <div>
+              <p className="eyebrow">Account home</p>
+              <h1>Welcome back</h1>
+            </div>
+            <button type="button" className="secondary-button" onClick={handleLogout}>
+              Log out
+            </button>
+          </header>
+
+          <section className="user-summary">
+            <article>
+              <span className="summary-label">Tenant</span>
+              <strong>{currentUser.tenantId ?? 'No tenant assigned'}</strong>
+            </article>
+            <article>
+              <span className="summary-label">Roles</span>
+              <strong>{currentUser.roles.length > 0 ? currentUser.roles.join(', ') : 'No roles'}</strong>
+            </article>
+            <article>
+              <span className="summary-label">Email</span>
+              <strong>{currentUser.email}</strong>
+            </article>
+          </section>
+
+          <section className="workspace-card">
+            <div className="workspace-head">
+              <div>
+                <p className="section-label">Accessible submissions</p>
+                <h2>Questionnaires</h2>
+              </div>
+              <input
+                className="search-input"
+                type="search"
+                value={questionSearch}
+                onChange={(event) => setQuestionSearch(event.target.value)}
+                placeholder="Search questionnaire"
+                aria-label="Search questionnaire"
+              />
+            </div>
+
+            <div className="table-card">
+              <div className="table-head">
+                <span>Questionnaire</span>
+                <span>Submission</span>
+              </div>
+
+              {filteredQuestionnaires.length === 0 ? (
+                <p className="empty-state">No questionnaires match your search.</p>
+              ) : (
+                <div className="table-body">
+                  {filteredQuestionnaires.map((questionnaire) => (
+                    <button
+                      key={questionnaire.id}
+                      type="button"
+                      className="table-row"
+                      onClick={() => openQuestionnaire(questionnaire)}
+                    >
+                      <span className="questionnaire-title">{questionnaire.title}</span>
+                      <span className="submission-badge">Not submitted</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        </section>
+      ) : null}
+
+      {view === 'questionnaire' && currentUser && selectedQuestionnaire ? (
+        <section className="questionnaire-shell">
+          <header className="questionnaire-header">
+            <div>
+              <button
+                type="button"
+                className="back-link"
+                onClick={() => setView('home')}
+              >
+                Back to home
+              </button>
+              <p className="eyebrow">Questionnaire</p>
+              <h1>{selectedQuestionnaire.title}</h1>
+            </div>
+            <div className="questionnaire-meta">
+              <span>{currentUser.email}</span>
+              <span>Tenant {currentUser.tenantId ?? 'n/a'}</span>
+            </div>
+          </header>
+
+          <form className="questionnaire-form" onSubmit={handleFakeSubmit}>
+            {selectedDefinition?.questions.length ? (
+              selectedDefinition.questions.map((question, index) => (
+                <label key={question.key} className="question-card">
+                  <span className="question-order">Question {index + 1}</span>
+                  <span className="question-text">{question.text}</span>
+                  <textarea
+                    value={answers[question.key] ?? ''}
+                    onChange={(event) => handleAnswerChange(question.key, event)}
+                    placeholder="Write your answer here"
+                    rows={5}
+                  />
+                </label>
+              ))
+            ) : (
+              <p className="empty-state">This questionnaire does not contain any questions.</p>
+            )}
+
+            <div className="form-actions">
+              <button type="submit">Submit</button>
+            </div>
+          </form>
+        </section>
+      ) : null}
     </main>
   )
 }
