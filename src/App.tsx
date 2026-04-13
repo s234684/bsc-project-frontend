@@ -1,120 +1,174 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
+import { useEffect, useState } from 'react'
+import type { FormEvent } from 'react'
 import './App.css'
 
+type CurrentUser = {
+  userId: number
+  tenantId: string | null
+  email: string
+  roles: string[]
+}
+
+type QuestionnaireResponse = {
+  id: number
+  title: string
+  tenantId: string
+  creatorId: number | null
+}
+
+const DEFAULT_DEBUG_USER = 'alice@example.com'
+
 function App() {
-  const [count, setCount] = useState(0)
+  const [debugUser, setDebugUser] = useState(DEFAULT_DEBUG_USER)
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null)
+  const [questionnaires, setQuestionnaires] = useState<QuestionnaireResponse[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [loadingUser, setLoadingUser] = useState(false)
+  const [loadingQuestionnaires, setLoadingQuestionnaires] = useState(false)
+
+  async function api<T>(path: string, email: string): Promise<T> {
+    const response = await fetch(path, {
+      headers: {
+        'X-Debug-User': email,
+      },
+    })
+
+    if (!response.ok) {
+      const message = await response.text()
+      throw new Error(message || `Request failed for ${path}`)
+    }
+
+    return response.json() as Promise<T>
+  }
+
+  async function loadCurrentUser(email: string) {
+    setLoadingUser(true)
+    setError(null)
+
+    try {
+      const data = await api<CurrentUser>('/api/auth/me-safe', email)
+      setCurrentUser(data)
+    } catch (err) {
+      setCurrentUser(null)
+      setQuestionnaires([])
+      setError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setLoadingUser(false)
+    }
+  }
+
+  async function loadQuestionnaires(email: string) {
+    setLoadingQuestionnaires(true)
+    setError(null)
+
+    try {
+      const data = await api<QuestionnaireResponse[]>('/api/questionnaire', email)
+      setQuestionnaires(data)
+    } catch (err) {
+      setQuestionnaires([])
+      setError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setLoadingQuestionnaires(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadCurrentUser(DEFAULT_DEBUG_USER)
+  }, [])
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    void loadCurrentUser(debugUser)
+  }
+
+  function handleLoadQuestionnaires() {
+    void loadQuestionnaires(debugUser)
+  }
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
+    <main className="app-shell">
+      <section className="panel">
+        <p className="eyebrow">Mock auth + questionnaire slice</p>
+        <h1>Backend identity check</h1>
+        <p className="lead">
+          This screen sends an <code>X-Debug-User</code> header to the backend,
+          verifies the current user, and then loads tenant-scoped questionnaires
+          through the same mock identity.
+        </p>
+
+        <form className="debug-form" onSubmit={handleSubmit}>
+          <label htmlFor="debug-user">Debug user email</label>
+          <div className="row">
+            <input
+              id="debug-user"
+              name="debug-user"
+              type="email"
+              value={debugUser}
+              onChange={(event) => setDebugUser(event.target.value)}
+              placeholder="alice@example.com"
+            />
+            <button type="submit" disabled={loadingUser}>
+              {loadingUser ? 'Loading user...' : 'Load current user'}
+            </button>
+          </div>
+        </form>
+
+        <div className="status-grid">
+          <article className="card">
+            <h2>Auth request</h2>
+            <p>
+              <code>GET /api/auth/me-safe</code>
+            </p>
+          </article>
+          <article className="card">
+            <h2>Header used</h2>
+            <p>
+              <code>X-Debug-User: {debugUser || '(empty)'}</code>
+            </p>
+          </article>
         </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
+
+        {error ? (
+          <section className="result error">
+            <h2>Backend response</h2>
+            <p>{error}</p>
+          </section>
+        ) : (
+          <section className="result">
+            <h2>Resolved current user</h2>
+            <pre>{currentUser ? JSON.stringify(currentUser, null, 2) : 'No user loaded yet.'}</pre>
+          </section>
+        )}
+
+        <section className="result questionnaires">
+          <div className="section-heading">
+            <h2>Tenant questionnaires</h2>
+            <button
+              type="button"
+              onClick={handleLoadQuestionnaires}
+              disabled={loadingQuestionnaires || !currentUser}
+            >
+              {loadingQuestionnaires ? 'Loading...' : 'Load questionnaires'}
+            </button>
+          </div>
+
+          {questionnaires.length === 0 ? (
+            <p>No questionnaires loaded yet.</p>
+          ) : (
+            <ul className="questionnaire-list">
+              {questionnaires.map((questionnaire) => (
+                <li key={questionnaire.id}>
+                  <strong>{questionnaire.title}</strong>
+                  <span>Id: {questionnaire.id}</span>
+                  <span>Tenant: {questionnaire.tenantId}</span>
+                  <span>Creator: {questionnaire.creatorId ?? 'None'}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       </section>
-
-      <div className="ticks"></div>
-
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
-
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+    </main>
   )
 }
 
