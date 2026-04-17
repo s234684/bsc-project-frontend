@@ -262,6 +262,15 @@
   cursor: pointer;
 }
 
+.table-row:disabled {
+  cursor: not-allowed;
+}
+
+.table-row-disabled {
+  opacity: 0.6;
+  background: rgba(230, 232, 233, 0.72);
+}
+
 .questionnaire-title {
   font-weight: 700;
   color: #1f2a30;
@@ -274,6 +283,11 @@
   background: rgba(120, 154, 94, 0.12);
   color: #466337;
   font-size: 0.9rem;
+}
+
+.submission-badge-complete {
+  background: rgba(56, 125, 87, 0.18);
+  color: #24563a;
 }
 
 .empty-state {
@@ -325,6 +339,29 @@
   padding: 16px 18px;
   resize: vertical;
   font: inherit;
+}
+
+.question-feedback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.char-count {
+  color: #67737a;
+  font-size: 0.9rem;
+}
+
+.char-count-over {
+  color: #a33636;
+  font-weight: 700;
+}
+
+.field-error {
+  color: #a33636;
+  font-size: 0.9rem;
+  font-weight: 600;
 }
 
 .form-actions {

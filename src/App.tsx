@@ -27,6 +27,16 @@ type ParsedDefinition = {
   questions: QuestionDefinition[]
 }
 
+type SubmissionResponse = {
+  submissionId: number
+  questionnaireId: number
+  tenantId: string
+  userId: number
+  answerJson: string
+}
+
+type AnswerErrors = Record<string, string>
+
 type AppView = 'login' | 'home' | 'questionnaire'
 
 const DEFAULT_DEBUG_USER = 'alice@example.com'
@@ -43,6 +53,10 @@ function App() {
   const [loadingLogin, setLoadingLogin] = useState(false)
   const [loadingQuestionnaire, setLoadingQuestionnaire] = useState(false)
   const [openingQuestionnaireId, setOpeningQuestionnaireId] = useState<number | null>(null)
+  const [submissions, setSubmissions] = useState<SubmissionResponse[]>([])
+  const [answerErrors, setAnswerErrors] = useState<AnswerErrors>({})
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
 
   async function api<T>(path: string, email: string): Promise<T> {
     const response = await fetch(path, {
@@ -59,21 +73,43 @@ function App() {
     return response.json() as Promise<T>
   }
 
+  async function apiWithBody<T>(path: string, email: string, method: string, body: unknown): Promise<T> {
+    const response = await fetch(path, {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Debug-User': email,
+      },
+      body: JSON.stringify(body),
+    })
+
+    if (!response.ok) {
+      const message = await response.text()
+      throw new Error(message || `Request failed for ${path}`)
+    }
+
+    return response.json() as Promise<T>
+  }
+
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setLoadingLogin(true)
     setError(null)
 
     try {
-      const [user, availableQuestionnaires] = await Promise.all([
+      const [user, availableQuestionnaires, userSubmissions] = await Promise.all([
         api<CurrentUser>('/api/auth/me-safe', debugUser),
         api<QuestionnaireResponse[]>('/api/questionnaire', debugUser),
+        api<SubmissionResponse[]>('/api/me/submissions', debugUser),
       ])
 
+      setSubmissions(userSubmissions)
       setCurrentUser(user)
       setQuestionnaires(availableQuestionnaires)
       setSelectedQuestionnaire(null)
       setAnswers({})
+      setAnswerErrors({})
+      setSubmitError(null)
       setQuestionSearch('')
       setView('home')
     } catch (err) {
@@ -81,6 +117,8 @@ function App() {
       setQuestionnaires([])
       setSelectedQuestionnaire(null)
       setAnswers({})
+      setAnswerErrors({})
+      setSubmitError(null)
       setView('login')
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
@@ -93,6 +131,9 @@ function App() {
     setQuestionnaires([])
     setSelectedQuestionnaire(null)
     setAnswers({})
+    setSubmissions([])
+    setAnswerErrors({})
+    setSubmitError(null)
     setQuestionSearch('')
     setError(null)
     setView('login')
@@ -121,6 +162,7 @@ function App() {
     setLoadingQuestionnaire(true)
     setOpeningQuestionnaireId(questionnaire.id)
     setError(null)
+    setSubmitError(null)
 
     try {
       const questionnaireDetails = await api<QuestionnaireResponse>(
@@ -130,6 +172,7 @@ function App() {
 
       setSelectedQuestionnaire(questionnaireDetails)
       setAnswers({})
+      setAnswerErrors({})
       setView('questionnaire')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -140,18 +183,99 @@ function App() {
   }
 
   function handleAnswerChange(key: string, event: ChangeEvent<HTMLTextAreaElement>) {
+    const value = event.target.value
+
     setAnswers((currentAnswers) => ({
       ...currentAnswers,
-      [key]: event.target.value,
+      [key]: value,
     }))
+
+    setAnswerErrors((currentErrors) => {
+      const nextErrors = { ...currentErrors }
+      const trimmedValue = value.trim()
+
+      if (!trimmedValue) {
+        nextErrors[key] = 'This answer is required.'
+      } else if (trimmedValue.length > 255) {
+        nextErrors[key] = 'Answer must be 255 characters or fewer.'
+      } else {
+        delete nextErrors[key]
+      }
+
+      return nextErrors
+    })
   }
 
-  function handleFakeSubmit(event: FormEvent<HTMLFormElement>) {
+  function validateAnswers(questions: QuestionDefinition[], currentAnswers: Record<string, string>) {
+    const errors: AnswerErrors = {}
+
+    for (const question of questions) {
+      const value = (currentAnswers[question.key] ?? '').trim()
+
+      if (!value) {
+        errors[question.key] = 'This answer is required.'
+        continue
+      }
+
+      if (value.length > 255) {
+        errors[question.key] = 'Answer must be 255 characters or fewer.'
+      }
+    }
+
+    return errors
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+
+    if (!selectedDefinition || !selectedQuestionnaire) {
+      return
+    }
+
+    const errors = validateAnswers(selectedDefinition.questions, answers)
+    setAnswerErrors(errors)
+
+    if (Object.keys(errors).length > 0) {
+      return
+    }
+
+    const payload = {
+      answerJson: JSON.stringify({
+        answers: selectedDefinition.questions.map((question) => ({
+          key: question.key,
+          value: (answers[question.key] ?? '').trim(),
+        })),
+      }),
+    }
+
+    setSubmitting(true)
+    setSubmitError(null)
+
+    try {
+      const savedSubmission = await apiWithBody<SubmissionResponse>(
+        `/api/questionnaire/${selectedQuestionnaire.id}/submission`,
+        debugUser,
+        'POST',
+        payload,
+      )
+
+      setSubmissions((currentSubmissions) => [...currentSubmissions, savedSubmission])
+      setSelectedQuestionnaire(null)
+      setAnswers({})
+      setAnswerErrors({})
+      setView('home')
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   const filteredQuestionnaires = questionnaires.filter((questionnaire) =>
     questionnaire.title.toLowerCase().includes(questionSearch.trim().toLowerCase()),
+  )
+  const submittedByQuestionnaireId = new Set(
+    submissions.map((submission) => submission.questionnaireId),
   )
 
   const selectedDefinition = selectedQuestionnaire
@@ -262,18 +386,28 @@ function App() {
               ) : (
                 <div className="table-body">
                   {filteredQuestionnaires.map((questionnaire) => (
-                    <button
-                      key={questionnaire.id}
-                      type="button"
-                      className="table-row"
-                      onClick={() => void openQuestionnaire(questionnaire)}
-                      disabled={loadingQuestionnaire}
-                    >
-                      <span className="questionnaire-title">{questionnaire.title}</span>
-                      <span className="submission-badge">
-                        {openingQuestionnaireId === questionnaire.id ? 'Opening...' : 'Not submitted'}
-                      </span>
-                    </button>
+                    (() => {
+                      const isSubmitted = submittedByQuestionnaireId.has(questionnaire.id)
+
+                      return (
+                        <button
+                          key={questionnaire.id}
+                          type="button"
+                          className={`table-row ${isSubmitted ? 'table-row-disabled' : ''}`}
+                          onClick={() => void openQuestionnaire(questionnaire)}
+                          disabled={loadingQuestionnaire || isSubmitted}
+                        >
+                          <span className="questionnaire-title">{questionnaire.title}</span>
+                          <span className={`submission-badge ${isSubmitted ? 'submission-badge-complete' : ''}`}>
+                            {openingQuestionnaireId === questionnaire.id
+                              ? 'Opening...'
+                              : isSubmitted
+                                ? 'Submitted'
+                                : 'Not submitted'}
+                          </span>
+                        </button>
+                      )
+                    })()
                   ))}
                 </div>
               )}
@@ -304,7 +438,7 @@ function App() {
             </div>
           </header>
 
-          <form className="questionnaire-form" onSubmit={handleFakeSubmit}>
+          <form className="questionnaire-form" onSubmit={handleSubmit}>
             {selectedDefinition?.questions.length ? (
               selectedDefinition.questions.map((question, index) => (
                 <label key={question.key} className="question-card">
@@ -316,14 +450,30 @@ function App() {
                     placeholder="Write your answer here"
                     rows={5}
                   />
+                  <div className="question-feedback">
+                    <span
+                      className={`char-count ${
+                        (answers[question.key] ?? '').trim().length > 255 ? 'char-count-over' : ''
+                      }`}
+                    >
+                      {(answers[question.key] ?? '').length}/255
+                    </span>
+                    {answerErrors[question.key] ? (
+                      <span className="field-error">{answerErrors[question.key]}</span>
+                    ) : null}
+                  </div>
                 </label>
               ))
             ) : (
               <p className="empty-state">This questionnaire does not contain any questions.</p>
             )}
 
+            {submitError ? <p className="error-banner">{submitError}</p> : null}
+
             <div className="form-actions">
-              <button type="submit">Submit</button>
+              <button type="submit" disabled={submitting}>
+                {submitting ? 'Submitting...' : 'Submit'}
+              </button>
             </div>
           </form>
         </section>
