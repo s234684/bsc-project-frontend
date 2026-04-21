@@ -37,7 +37,19 @@ type SubmissionResponse = {
 
 type AnswerErrors = Record<string, string>
 
-type AppView = 'login' | 'home' | 'questionnaire'
+type SubmissionAnswer = {
+  key: string
+  value: string
+}
+
+type SubmissionDetail = {
+  submissionId: number
+  questionnaireId: number
+  userId: number
+  answers: SubmissionAnswer[]
+}
+
+type AppView = 'login' | 'home' | 'questionnaire' | 'submissions'
 
 const DEFAULT_DEBUG_USER = 'alice@example.com'
 
@@ -57,6 +69,8 @@ function App() {
   const [answerErrors, setAnswerErrors] = useState<AnswerErrors>({})
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [allSubmissions, setAllSubmissions] = useState<SubmissionDetail[]>([])
+  const [loadingSubmissions, setLoadingSubmissions] = useState(false)
 
   async function api<T>(path: string, email: string): Promise<T> {
     const response = await fetch(path, {
@@ -134,6 +148,7 @@ function App() {
     setSubmissions([])
     setAnswerErrors({})
     setSubmitError(null)
+    setAllSubmissions([])
     setQuestionSearch('')
     setError(null)
     setView('login')
@@ -179,6 +194,45 @@ function App() {
     } finally {
       setLoadingQuestionnaire(false)
       setOpeningQuestionnaireId(null)
+    }
+  }
+
+  async function viewSubmissions(questionnaire: QuestionnaireResponse) {
+    setLoadingSubmissions(true)
+    setError(null)
+    setSelectedQuestionnaire(questionnaire)
+
+    try {
+      const submissionResponses = await api<SubmissionResponse[]>(
+        `/api/questionnaire/${questionnaire.id}/submission`,
+        debugUser,
+      )
+
+      const detailedSubmissions: SubmissionDetail[] = submissionResponses.map((submission) => {
+        try {
+          const parsed = JSON.parse(submission.answerJson) as { answers?: SubmissionAnswer[] }
+          return {
+            submissionId: submission.submissionId,
+            questionnaireId: submission.questionnaireId,
+            userId: submission.userId,
+            answers: parsed.answers ?? [],
+          }
+        } catch {
+          return {
+            submissionId: submission.submissionId,
+            questionnaireId: submission.questionnaireId,
+            userId: submission.userId,
+            answers: [],
+          }
+        }
+      })
+
+      setAllSubmissions(detailedSubmissions)
+      setView('submissions')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setLoadingSubmissions(false)
     }
   }
 
@@ -388,24 +442,36 @@ function App() {
                   {filteredQuestionnaires.map((questionnaire) => (
                     (() => {
                       const isSubmitted = submittedByQuestionnaireId.has(questionnaire.id)
+                      const isManager = currentUser.roles.includes('MANAGER')
 
                       return (
-                        <button
-                          key={questionnaire.id}
-                          type="button"
-                          className={`table-row ${isSubmitted ? 'table-row-disabled' : ''}`}
-                          onClick={() => void openQuestionnaire(questionnaire)}
-                          disabled={loadingQuestionnaire || isSubmitted}
-                        >
-                          <span className="questionnaire-title">{questionnaire.title}</span>
-                          <span className={`submission-badge ${isSubmitted ? 'submission-badge-complete' : ''}`}>
-                            {openingQuestionnaireId === questionnaire.id
-                              ? 'Opening...'
-                              : isSubmitted
-                                ? 'Submitted'
-                                : 'Not submitted'}
-                          </span>
-                        </button>
+                        <div key={questionnaire.id} className="table-row-wrapper">
+                          <button
+                            type="button"
+                            className={`table-row ${isSubmitted ? 'table-row-disabled' : ''}`}
+                            onClick={() => void openQuestionnaire(questionnaire)}
+                            disabled={loadingQuestionnaire || isSubmitted}
+                          >
+                            <span className="questionnaire-title">{questionnaire.title}</span>
+                            <span className={`submission-badge ${isSubmitted ? 'submission-badge-complete' : ''}`}>
+                              {openingQuestionnaireId === questionnaire.id
+                                ? 'Opening...'
+                                : isSubmitted
+                                  ? 'Submitted'
+                                  : 'Not submitted'}
+                            </span>
+                          </button>
+                          {isManager && (
+                            <button
+                              type="button"
+                              className="view-submissions-btn"
+                              onClick={() => void viewSubmissions(questionnaire)}
+                              disabled={loadingSubmissions}
+                            >
+                              {loadingSubmissions ? 'Loading...' : 'View Submissions'}
+                            </button>
+                          )}
+                        </div>
                       )
                     })()
                   ))}
@@ -476,6 +542,56 @@ function App() {
               </button>
             </div>
           </form>
+        </section>
+      ) : null}
+
+      {view === 'submissions' && currentUser && selectedQuestionnaire ? (
+        <section className="submissions-shell">
+          <header className="submissions-header">
+            <div>
+              <button
+                type="button"
+                className="back-link"
+                onClick={() => setView('home')}
+              >
+                Back to home
+              </button>
+              <p className="eyebrow">Submissions</p>
+              <h1>{selectedQuestionnaire.title}</h1>
+            </div>
+            <div className="submissions-meta">
+              <span>{currentUser.email}</span>
+              <span>{currentUser.tenantName ?? 'No tenant assigned'}</span>
+            </div>
+          </header>
+
+          <section className="submissions-list">
+            {allSubmissions.length === 0 ? (
+              <p className="empty-state">No submissions for this questionnaire yet.</p>
+            ) : (
+              <div className="submissions-grid">
+                {allSubmissions.map((submission) => (
+                  <article key={submission.submissionId} className="submission-card">
+                    <h3>User ID: {submission.userId}</h3>
+                    <div className="submission-answers">
+                      {submission.answers.length > 0 ? (
+                        submission.answers.map((answer) => (
+                          <div key={answer.key} className="answer-item">
+                            <strong className="answer-key">{answer.key}:</strong>
+                            <p className="answer-value">{answer.value}</p>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="empty-state">No answers recorded for this submission.</p>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+
+            {error ? <p className="error-banner">{error}</p> : null}
+          </section>
         </section>
       ) : null}
     </main>
