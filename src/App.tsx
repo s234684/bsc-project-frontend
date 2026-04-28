@@ -49,7 +49,19 @@ type SubmissionDetail = {
   answers: SubmissionAnswer[]
 }
 
-type AppView = 'login' | 'home' | 'questionnaire' | 'submissions'
+type GapProfileResponse = {
+  id: number
+  participantId: number
+  questionnaireId: number
+  tenantId: string
+  observedLevel: number
+  targetLevel: number
+  gapValue: number
+  gapCategory: 'LOW' | 'MEDIUM' | 'HIGH'
+  createdAt: string
+}
+
+type AppView = 'login' | 'home' | 'questionnaire' | 'submissions' | 'gapProfiles'
 
 const DEFAULT_DEBUG_USER = 'alice@example.com'
 
@@ -71,6 +83,8 @@ function App() {
   const [submitting, setSubmitting] = useState(false)
   const [allSubmissions, setAllSubmissions] = useState<SubmissionDetail[]>([])
   const [loadingSubmissions, setLoadingSubmissions] = useState(false)
+  const [gapProfiles, setGapProfiles] = useState<GapProfileResponse[]>([])
+  const [loadingGapProfiles, setLoadingGapProfiles] = useState(false)
 
   async function api<T>(path: string, email: string): Promise<T> {
     const response = await fetch(path, {
@@ -149,6 +163,7 @@ function App() {
     setAnswerErrors({})
     setSubmitError(null)
     setAllSubmissions([])
+    setGapProfiles([])
     setQuestionSearch('')
     setError(null)
     setView('login')
@@ -236,6 +251,34 @@ function App() {
     }
   }
 
+  async function viewGapProfiles(questionnaire: QuestionnaireResponse, ownProfile = false) {
+    setLoadingGapProfiles(true)
+    setError(null)
+    setSelectedQuestionnaire(questionnaire)
+
+    try {
+      if (ownProfile) {
+        const ownGapProfile = await api<GapProfileResponse>(
+          `/api/questionnaire/${questionnaire.id}/gapprofiles/me`,
+          debugUser,
+        )
+        setGapProfiles([ownGapProfile])
+      } else {
+        const profileResponses = await api<GapProfileResponse[]>(
+          `/api/questionnaire/${questionnaire.id}/gapprofiles`,
+          debugUser,
+        )
+        setGapProfiles(profileResponses)
+      }
+
+      setView('gapProfiles')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
+    } finally {
+      setLoadingGapProfiles(false)
+    }
+  }
+
   function handleAnswerChange(key: string, event: ChangeEvent<HTMLTextAreaElement>) {
     const value = event.target.value
 
@@ -314,6 +357,7 @@ function App() {
       )
 
       setSubmissions((currentSubmissions) => [...currentSubmissions, savedSubmission])
+      setGapProfiles([])
       setSelectedQuestionnaire(null)
       setAnswers({})
       setAnswerErrors({})
@@ -335,6 +379,31 @@ function App() {
   const selectedDefinition = selectedQuestionnaire
     ? parseDefinition(selectedQuestionnaire.definitionJson)
     : null
+
+  const isParticipant = currentUser?.roles.includes('PARTICIPANT') ?? false
+  const isManager = currentUser?.roles.includes('MANAGER') ?? false
+  const isInstructor = currentUser?.roles.includes('INSTRUCTOR') ?? false
+
+  function formatScore(value: number) {
+    return value.toFixed(2)
+  }
+
+  function formatCategory(category: GapProfileResponse['gapCategory']) {
+    return category.charAt(0) + category.slice(1).toLowerCase()
+  }
+
+  function formatDate(value: string) {
+    const date = new Date(value)
+    return Number.isNaN(date.getTime())
+      ? value
+      : date.toLocaleString(undefined, {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+        })
+  }
 
   useEffect(() => {
     if (selectedQuestionnaire == null) {
@@ -416,7 +485,7 @@ function App() {
           <section className="workspace-card">
             <div className="workspace-head">
               <div>
-                <p className="section-label">Accessible submissions</p>
+                <p className="section-label">Workspace</p>
                 <h2>Questionnaires</h2>
               </div>
               <input
@@ -432,7 +501,8 @@ function App() {
             <div className="table-card">
               <div className="table-head">
                 <span>Questionnaire</span>
-                <span>Submission</span>
+                <span>Status</span>
+                <span>Actions</span>
               </div>
 
               {filteredQuestionnaires.length === 0 ? (
@@ -442,35 +512,58 @@ function App() {
                   {filteredQuestionnaires.map((questionnaire) => (
                     (() => {
                       const isSubmitted = submittedByQuestionnaireId.has(questionnaire.id)
-                      const isManager = currentUser.roles.includes('MANAGER')
+                      const canAnswer = isParticipant && !isSubmitted
 
                       return (
-                        <div key={questionnaire.id} className="table-row-wrapper">
-                          <button
-                            type="button"
-                            className={`table-row ${isSubmitted ? 'table-row-disabled' : ''}`}
-                            onClick={() => void openQuestionnaire(questionnaire)}
-                            disabled={loadingQuestionnaire || isSubmitted}
-                          >
+                        <div key={questionnaire.id} className="table-row">
+                          <div>
                             <span className="questionnaire-title">{questionnaire.title}</span>
-                            <span className={`submission-badge ${isSubmitted ? 'submission-badge-complete' : ''}`}>
-                              {openingQuestionnaireId === questionnaire.id
-                                ? 'Opening...'
-                                : isSubmitted
-                                  ? 'Submitted'
-                                  : 'Not submitted'}
-                            </span>
-                          </button>
-                          {isManager && (
-                            <button
-                              type="button"
-                              className="view-submissions-btn"
-                              onClick={() => void viewSubmissions(questionnaire)}
-                              disabled={loadingSubmissions}
-                            >
-                              {loadingSubmissions ? 'Loading...' : 'View Submissions'}
-                            </button>
-                          )}
+                          </div>
+                          <span className={`submission-badge ${isSubmitted ? 'submission-badge-complete' : ''}`}>
+                            {isSubmitted ? 'Submitted' : isParticipant ? 'Not submitted' : 'Available'}
+                          </span>
+                          <div className="row-actions">
+                            {canAnswer ? (
+                              <button
+                                type="button"
+                                className="action-button primary-action"
+                                onClick={() => void openQuestionnaire(questionnaire)}
+                                disabled={loadingQuestionnaire}
+                              >
+                                {openingQuestionnaireId === questionnaire.id ? 'Opening...' : 'Start'}
+                              </button>
+                            ) : null}
+                            {isParticipant && isSubmitted ? (
+                              <button
+                                type="button"
+                                className="action-button"
+                                onClick={() => void viewGapProfiles(questionnaire, true)}
+                                disabled={loadingGapProfiles}
+                              >
+                                {loadingGapProfiles ? 'Loading...' : 'View gap profile'}
+                              </button>
+                            ) : null}
+                            {isInstructor ? (
+                              <button
+                                type="button"
+                                className="action-button"
+                                onClick={() => void viewSubmissions(questionnaire)}
+                                disabled={loadingSubmissions}
+                              >
+                                {loadingSubmissions ? 'Loading...' : 'Submissions'}
+                              </button>
+                            ) : null}
+                            {isManager || isInstructor ? (
+                              <button
+                                type="button"
+                                className="action-button"
+                                onClick={() => void viewGapProfiles(questionnaire)}
+                                disabled={loadingGapProfiles}
+                              >
+                                {loadingGapProfiles ? 'Loading...' : 'Gap profiles'}
+                              </button>
+                            ) : null}
+                          </div>
                         </div>
                       )
                     })()
@@ -587,6 +680,63 @@ function App() {
                     </div>
                   </article>
                 ))}
+              </div>
+            )}
+
+            {error ? <p className="error-banner">{error}</p> : null}
+          </section>
+        </section>
+      ) : null}
+
+      {view === 'gapProfiles' && currentUser && selectedQuestionnaire ? (
+        <section className="submissions-shell">
+          <header className="submissions-header">
+            <div>
+              <button
+                type="button"
+                className="back-link"
+                onClick={() => setView('home')}
+              >
+                Back to home
+              </button>
+              <p className="eyebrow">Gap profiles</p>
+              <h1>{selectedQuestionnaire.title}</h1>
+            </div>
+            <div className="submissions-meta">
+              <span>{currentUser.email}</span>
+              <span>{currentUser.tenantName ?? 'No tenant assigned'}</span>
+            </div>
+          </header>
+
+          <section className="submissions-list">
+            {gapProfiles.length === 0 ? (
+              <p className="empty-state">No gap profiles for this questionnaire yet.</p>
+            ) : (
+              <div className="profile-table-card">
+                <div className="profile-table-head">
+                  <span>Participant</span>
+                  <span>Observed</span>
+                  <span>Target</span>
+                  <span>Gap</span>
+                  <span>Category</span>
+                  <span>Created</span>
+                </div>
+                <div className="profile-table-body">
+                  {gapProfiles.map((profile) => (
+                    <div key={profile.id} className="profile-table-row">
+                      <span>#{profile.participantId}</span>
+                      <span>{formatScore(profile.observedLevel)}</span>
+                      <span>{formatScore(profile.targetLevel)}</span>
+                      <span>{formatScore(profile.gapValue)}</span>
+                      <span>
+                        <span className={`gap-category gap-category-${profile.gapCategory.toLowerCase()}`}>
+                          {formatCategory(profile.gapCategory)}
+                        </span>
+                      </span>
+                      <span>{formatDate(profile.createdAt)}</span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
