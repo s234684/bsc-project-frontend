@@ -251,6 +251,44 @@ function App() {
     }
   }
 
+  function viewOwnSubmission(questionnaire: QuestionnaireResponse) {
+    const ownSubmission = submissions.find(
+      (submission) => submission.questionnaireId === questionnaire.id,
+    )
+
+    setError(null)
+    setSelectedQuestionnaire(questionnaire)
+
+    if (!ownSubmission) {
+      setAllSubmissions([])
+      setView('submissions')
+      return
+    }
+
+    try {
+      const parsed = JSON.parse(ownSubmission.answerJson) as { answers?: SubmissionAnswer[] }
+      setAllSubmissions([
+        {
+          submissionId: ownSubmission.submissionId,
+          questionnaireId: ownSubmission.questionnaireId,
+          userId: ownSubmission.userId,
+          answers: parsed.answers ?? [],
+        },
+      ])
+    } catch {
+      setAllSubmissions([
+        {
+          submissionId: ownSubmission.submissionId,
+          questionnaireId: ownSubmission.questionnaireId,
+          userId: ownSubmission.userId,
+          answers: [],
+        },
+      ])
+    }
+
+    setView('submissions')
+  }
+
   async function viewGapProfiles(questionnaire: QuestionnaireResponse, ownProfile = false) {
     setLoadingGapProfiles(true)
     setError(null)
@@ -405,6 +443,10 @@ function App() {
         })
   }
 
+  function questionTextForKey(key: string) {
+    return selectedDefinition?.questions.find((question) => question.key === key)?.text ?? key
+  }
+
   useEffect(() => {
     if (selectedQuestionnaire == null) {
       return
@@ -531,6 +573,15 @@ function App() {
                                 disabled={loadingQuestionnaire}
                               >
                                 {openingQuestionnaireId === questionnaire.id ? 'Opening...' : 'Start'}
+                              </button>
+                            ) : null}
+                            {isParticipant && isSubmitted ? (
+                              <button
+                                type="button"
+                                className="action-button"
+                                onClick={() => viewOwnSubmission(questionnaire)}
+                              >
+                                View answers
                               </button>
                             ) : null}
                             {isParticipant && isSubmitted ? (
@@ -665,12 +716,16 @@ function App() {
               <div className="submissions-grid">
                 {allSubmissions.map((submission) => (
                   <article key={submission.submissionId} className="submission-card">
-                    <h3>User ID: {submission.userId}</h3>
+                    <h3>
+                      {submission.userId === currentUser.userId
+                        ? 'Your submission'
+                        : `User ID: ${submission.userId}`}
+                    </h3>
                     <div className="submission-answers">
                       {submission.answers.length > 0 ? (
                         submission.answers.map((answer) => (
                           <div key={answer.key} className="answer-item">
-                            <strong className="answer-key">{answer.key}:</strong>
+                            <strong className="answer-key">{questionTextForKey(answer.key)}</strong>
                             <p className="answer-value">{answer.value}</p>
                           </div>
                         ))
